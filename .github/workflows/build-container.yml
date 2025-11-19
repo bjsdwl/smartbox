@@ -5,19 +5,17 @@ on:
 
 env:
   REPO_URL: https://github.com/openwrt/openwrt
-  # 根据你的 .config 中 Kernel 5.4 判断，这里建议用 openwrt-21.02 或 openwrt-22.03
-  # 如果你的板子需要特定分支，请修改这里
+  # 你的配置文件包含 Kernel 5.4，建议使用 openwrt-21.02 分支
   REPO_BRANCH: openwrt-21.02
   CONFIG_FILE: mx6ull.config
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 核心点：指定使用 OpenWrt 官方提供的构建环境镜像
+    # 核心修改：使用社区维护的专用构建镜像，预装了所有依赖
     container:
-      image: openwrt/buildroot:latest
-      # 这一步很重要，因为 GitHub Action 挂载卷的权限问题，
-      # 我们需要以 root 身份进入容器，稍后通过 FORCE_UNSAFE_CONFIGURE 绕过 root 检查
+      image: p3terx/openwrt-build-env:20.04
+      # 必须使用 root 身份并挂载工作目录
       options: --user root
 
     steps:
@@ -35,27 +33,29 @@ jobs:
 
     - name: Load Custom Configuration
       run: |
-        # 检查根目录下是否存在 mx6ull.config
+        # 检查配置文件
         if [ ! -f "$CONFIG_FILE" ]; then
           echo "Error: $CONFIG_FILE not found in repository root!"
           ls -la
           exit 1
         fi
         
-        # 复制配置文件
+        # 复制配置文件到 openwrt 目录
         cp $CONFIG_FILE openwrt/.config
         echo "Configuration loaded."
 
     - name: Update Feeds & Dependencies
       working-directory: ./openwrt
       run: |
-        # 容器内无需 apt-get install，直接更新 feeds
+        # 容器内已经预装了依赖，不需要 apt-get install
+        # 直接更新 feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
-        # 应用配置 (自动补全依赖)
-        # 必须添加 FORCE_UNSAFE_CONFIGURE=1 否则 OpenWrt 不允许 root 编译
+        # 设置环境变量以允许 root 编译
         export FORCE_UNSAFE_CONFIGURE=1
+        
+        # 应用配置
         make defconfig
 
     - name: Download Packages
@@ -73,17 +73,21 @@ jobs:
         echo -e "$(nproc) thread compile"
         export FORCE_UNSAFE_CONFIGURE=1
         
-        # 开始编译，增加 V=s 以便出错时查看日志
+        # 开始编译，如果多核失败则切换单核并打印日志
         make -j$(nproc) || make -j1 V=s
 
     - name: Organize Files
+      # 只有编译成功才执行
+      if: success()
       run: |
+        # 移动并压缩固件目录，防止文件过多
         cd openwrt/bin/targets/*/*
         rm -rf packages
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
+      if: success()
       with:
         name: OpenWrt-Firmware
         path: ${{ env.FIRMWARE_PATH }}
