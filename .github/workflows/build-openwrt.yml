@@ -14,7 +14,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04 # OpenWrt 旧版本通常在 20.04 上编译更稳定
+    runs-on: ubuntu-22.04 # OpenWrt 旧版本通常在 22.04 上编译更稳定
 
     steps:
     - name: Checkout
