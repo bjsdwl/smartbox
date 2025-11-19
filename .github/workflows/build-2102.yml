@@ -11,10 +11,10 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
-    # 修正：使用官方通用 21.02 SDK 镜像（存在且稳定）
+    # 修正：添加 --user root 解决权限问题
     container:
       image: openwrt/sdk:openwrt-21.02   # 通用标签，会动态下载 SDK
-      options: --cpus 4                   # 限制 CPU 核心数，避免 runner 超载
+      options: --user root --cpus 4      # 以 root 运行 + 限制 CPU
 
     steps:
       - name: Checkout 代码（含你的 .config）
