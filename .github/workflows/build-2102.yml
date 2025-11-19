@@ -11,21 +11,23 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
-    # 关键：使用官方 21.02 SDK 镜像（里面自带 gcc8/python2/libssl1.1）
+    # 修正：使用官方 openwrt/sdk 镜像 + 正确的 imx6ull 标签
     container:
-      image: openwrtorg/sdk:imx6ull-21.02.7   # 官方 21.02 专用镜像
-      options: --cpus 4                        # GitHub Actions 免费 runner 给 2核，这里最多用 4
+      image: openwrt/sdk:imx6ull-generic-openwrt-21.02   # 官方 21.02 SDK（会自动下载 tarball）
+      options: --cpus 4                                  # 限制 CPU 核心数，避免 runner 超载
 
     steps:
       - name: Checkout 代码（含你的 .config）
         uses: actions/checkout@v4
 
-      - name: 准备编译环境
+      - name: 准备编译环境（镜像会自动 setup SDK）
         run: |
-          # 镜像里已经自带所有依赖，无需 apt install
+          # 镜像启动后会自动下载并解压 21.02 SDK（可能需要 2~5 分钟）
           echo "Current user: $(whoami)"
-          echo "OpenWrt version: $(cat VERSION)"
-          echo "Target: $(grep CONFIG_TARGET .config | head -1)"
+          echo "OpenWrt version: $(cat /openwrt/Release 2>/dev/null || echo '21.02')"
+          echo "Target from config: $(grep CONFIG_TARGET .config | head -1)"
+          # 等待 setup 完成（如果有 setup.sh）
+          if [ -f setup.sh ]; then ./setup.sh; fi
 
       - name: 复制你的 .config 并 defconfig
         run: |
