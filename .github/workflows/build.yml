@@ -27,7 +27,7 @@ jobs:
             python3-setuptools rsync swig unzip wget time qemu-utils
 
     - name: 使用最稳定的官方 Action（推荐）
-      uses: openwrt/build-openwrt-action@main
+      uses: OpenWrt-Actions/build-openwrt@main  # ← 这里是正确的仓库名
       with:
         config_file: .config   # 直接使用你仓库里的 .config
 
