@@ -5,17 +5,15 @@ on:
 
 env:
   REPO_URL: https://github.com/openwrt/openwrt
-  # 你的配置文件包含 Kernel 5.4，建议使用 openwrt-21.02 分支
   REPO_BRANCH: openwrt-21.02
-  CONFIG_FILE: mx6ull.config
+  # 修改点：这里原本是 mx6ull.config，改为你实际的文件名 imx6ull.config
+  CONFIG_FILE: imx6ull.config
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 核心修改：使用社区维护的专用构建镜像，预装了所有依赖
     container:
       image: p3terx/openwrt-build-env:20.04
-      # 必须使用 root 身份并挂载工作目录
       options: --user root
 
     steps:
@@ -24,38 +22,30 @@ jobs:
 
     - name: Clone OpenWrt Source
       run: |
-        # 解决 Git 安全目录报错
         git config --global --add safe.directory '*'
-        
-        # 克隆源码
         echo "Cloning $REPO_BRANCH from $REPO_URL..."
         git clone --depth 1 -b $REPO_BRANCH $REPO_URL openwrt
 
     - name: Load Custom Configuration
       run: |
-        # 检查配置文件
+        # 调试信息：打印当前目录文件列表，确认文件名
+        ls -la
+        
         if [ ! -f "$CONFIG_FILE" ]; then
           echo "Error: $CONFIG_FILE not found in repository root!"
-          ls -la
           exit 1
         fi
         
-        # 复制配置文件到 openwrt 目录
+        # 复制配置文件到 openwrt 源码目录
         cp $CONFIG_FILE openwrt/.config
         echo "Configuration loaded."
 
     - name: Update Feeds & Dependencies
       working-directory: ./openwrt
       run: |
-        # 容器内已经预装了依赖，不需要 apt-get install
-        # 直接更新 feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        
-        # 设置环境变量以允许 root 编译
         export FORCE_UNSAFE_CONFIGURE=1
-        
-        # 应用配置
         make defconfig
 
     - name: Download Packages
@@ -63,7 +53,6 @@ jobs:
       run: |
         export FORCE_UNSAFE_CONFIGURE=1
         make download -j8
-        # 清理下载失败的文件
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
@@ -72,15 +61,11 @@ jobs:
       run: |
         echo -e "$(nproc) thread compile"
         export FORCE_UNSAFE_CONFIGURE=1
-        
-        # 开始编译，如果多核失败则切换单核并打印日志
         make -j$(nproc) || make -j1 V=s
 
     - name: Organize Files
-      # 只有编译成功才执行
       if: success()
       run: |
-        # 移动并压缩固件目录，防止文件过多
         cd openwrt/bin/targets/*/*
         rm -rf packages
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
