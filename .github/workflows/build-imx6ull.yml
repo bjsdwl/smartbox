@@ -1,0 +1,104 @@
+name: Build OpenWrt imx6ull (SoMLabs)
+
+on:
+  workflow_dispatch: # 手动触发
+
+env:
+  # 你的配置文件名
+  CONFIG_FILE: imx6ull.config
+  # 补丁仓库地址 (截图中的仓库)
+  PATCH_REPO_URL: https://github.com/iuncuim/openwrt-imx6ull.git
+  # OpenWrt 官方地址
+  OPENWRT_REPO_URL: https://github.com/openwrt/openwrt.git
+  # 截图 README 中要求的特定 Commit Hash
+  OPENWRT_COMMIT: 76d90a5eaf3b7fc5bb1a1b8626db0e4e2487e876
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      # 使用这个环境以确保兼容旧版代码
+      image: p3terx/openwrt-build-env:20.04
+      options: --user root
+
+    steps:
+    - name: Checkout your repo (get .config)
+      uses: actions/checkout@v4
+
+    - name: Clone Official OpenWrt & Checkout specific commit
+      run: |
+        git config --global --add safe.directory '*'
+        # 1. 克隆官方源码
+        git clone $OPENWRT_REPO_URL openwrt
+        cd openwrt
+        # 2. 切换到 README 指定的特定 commit
+        echo "Switching to commit $OPENWRT_COMMIT..."
+        git checkout $OPENWRT_COMMIT
+
+    - name: Clone Patch Repo & Apply Patches
+      run: |
+        # 3. 克隆补丁仓库到临时目录
+        git clone $PATCH_REPO_URL patch_repo
+        
+        # 4. 复制补丁文件到 OpenWrt 源码目录 (关键步骤！)
+        # 这会将 target/linux 和 package/boot 覆盖/合并过去
+        echo "Applying patches from iuncuim/openwrt-imx6ull..."
+        cp -r patch_repo/* openwrt/
+        
+        # 清理临时目录
+        rm -rf patch_repo
+
+    - name: Load Custom Configuration
+      run: |
+        if [ ! -f "$CONFIG_FILE" ]; then
+          echo "Error: $CONFIG_FILE not found in repository root!"
+          exit 1
+        fi
+        # 复制你的配置文件
+        cp $CONFIG_FILE openwrt/.config
+        echo "Configuration loaded."
+
+    - name: Update Feeds & Dependencies
+      working-directory: ./openwrt
+      run: |
+        # 5. 更新 feeds (README 中的步骤)
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        
+        # 允许 root 编译
+        export FORCE_UNSAFE_CONFIGURE=1
+        
+        # 6. 扩展配置
+        # 因为上面打过补丁了，现在 make defconfig 应该能正确识别 CONFIG_TARGET_imx6ull 了
+        make defconfig
+
+    - name: Download Packages
+      working-directory: ./openwrt
+      run: |
+        export FORCE_UNSAFE_CONFIGURE=1
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile Firmware
+      working-directory: ./openwrt
+      run: |
+        echo -e "$(nproc) thread compile"
+        export FORCE_UNSAFE_CONFIGURE=1
+        # 编译
+        make -j$(nproc) || make -j1 V=s
+
+    - name: Organize Files
+      if: success()
+      run: |
+        # 整理生成的文件
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: OpenWrt-imx6ull-Firmware
+        path: ${{ env.FIRMWARE_PATH }}
