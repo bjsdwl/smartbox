@@ -11,35 +11,46 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
-    # 修正：使用官方 openwrt/sdk 镜像 + 正确的 imx6ull 标签
+    # 修正：使用官方通用 21.02 SDK 镜像（存在且稳定）
     container:
-      image: openwrt/sdk:imx6ull-generic-openwrt-21.02   # 官方 21.02 SDK（会自动下载 tarball）
-      options: --cpus 4                                  # 限制 CPU 核心数，避免 runner 超载
+      image: openwrt/sdk:openwrt-21.02   # 通用标签，会动态下载 SDK
+      options: --cpus 4                   # 限制 CPU 核心数，避免 runner 超载
 
     steps:
       - name: Checkout 代码（含你的 .config）
         uses: actions/checkout@v4
 
-      - name: 准备编译环境（镜像会自动 setup SDK）
+      - name: 准备编译环境（下载 imx6ull 21.02 SDK）
         run: |
-          # 镜像启动后会自动下载并解压 21.02 SDK（可能需要 2~5 分钟）
-          echo "Current user: $(whoami)"
-          echo "OpenWrt version: $(cat /openwrt/Release 2>/dev/null || echo '21.02')"
-          echo "Target from config: $(grep CONFIG_TARGET .config | head -1)"
-          # 等待 setup 完成（如果有 setup.sh）
+          # 镜像启动后自动运行 setup.sh（如果有），然后手动下载 imx6ull SDK tarball
           if [ -f setup.sh ]; then ./setup.sh; fi
+          
+          # 下载官方 21.02.7 imx6ull SDK（最新稳定补丁，~1.5GB，5~10 分钟）
+          wget https://downloads.openwrt.org/releases/21.02.7/targets/imx6ull/generic/openwrt-sdk-imx6ull-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz
+          
+          # 解压到 /openwrt（SDK 标准路径）
+          tar -xzf openwrt-sdk-*.tar.xz -C / || tar -xzf *.tar.xz -C /
+          
+          # 进入 SDK 目录并验证
+          cd /openwrt
+          echo "OpenWrt version: $(cat Release 2>/dev/null || echo '21.02.7')"
+          echo "Target: imx6ull/generic"
+          ls -la | head -10
 
       - name: 复制你的 .config 并 defconfig
         run: |
-          cp .config .config.custom
+          cd /openwrt
+          cp /github/workspace/.config .config.custom  # 从仓库根目录复制
           make defconfig
 
       - name: 开始编译（多核 + 详细日志）
         run: |
+          cd /openwrt
           make -j$(nproc) V=s || make -j1 V=s   # 失败时自动降到单核重试
 
       - name: 打包固件（只上传 imx6ull 相关文件）
         run: |
+          cd /openwrt
           mkdir -p upload
           cp bin/targets/imx6ull/generic/*.{bin,dtb,img.gz,manifest} upload/ 2>/dev/null || true
           cp bin/targets/imx6ull/generic/sha256sums upload/ 2>/dev/null || true
@@ -50,5 +61,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenWrt-21.02-VisionSOM6ULL-${{ github.sha }}
-          path: upload/*
+          path: /openwrt/upload/*
           if-no-files-found: error
