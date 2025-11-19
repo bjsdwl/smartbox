@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-21.02
     steps:
 
     - name: Checkout
@@ -26,9 +26,9 @@ jobs:
             g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils \
             python3-setuptools rsync swig unzip wget time qemu-utils zip
 
-    - name: Clone OpenWrt 源码（用稳定版 23.05 分支）
+    - name: Clone OpenWrt 源码（用稳定版 21.02 分支）
       run: |
-        git clone https://github.com/openwrt/openwrt.git -b openwrt-23.05 openwrt-source
+        git clone https://github.com/openwrt/openwrt.git -b openwrt-21.02 openwrt-source
         cd openwrt-source
 
     - name: 准备 .config 和 feeds
