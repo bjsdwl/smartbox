@@ -1,0 +1,132 @@
+name: Build OpenWrt imx6ull eMMC
+
+on:
+  workflow_dispatch: # 允许手动触发
+
+env:
+  # 你仓库根目录下的配置文件名 (保持原样，脚本会自动修改它)
+  CONFIG_FILE: imx6ull.config
+  # 补丁仓库 (BSP)
+  PATCH_REPO_URL: https://github.com/iuncuim/openwrt-imx6ull.git
+  # OpenWrt 官方仓库
+  OPENWRT_REPO_URL: https://github.com/openwrt/openwrt.git
+  # 必须使用的特定 Commit (适配补丁)
+  OPENWRT_COMMIT: 76d90a5eaf3b7fc5bb1a1b8626db0e4e2487e876
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      # 使用预装好环境的容器，解决依赖问题
+      image: p3terx/openwrt-build-env:20.04
+      options: --user root
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Prepare Source Code
+      run: |
+        # 解决 Git 目录权限安全报错
+        git config --global --add safe.directory '*'
+        
+        # 1. 克隆官方源码
+        echo "Cloning OpenWrt..."
+        git clone $OPENWRT_REPO_URL openwrt
+        cd openwrt
+        
+        # 2. 切换到特定的历史 Commit
+        echo "Switching to commit $OPENWRT_COMMIT..."
+        git checkout $OPENWRT_COMMIT
+        cd ..
+        
+        # 3. 克隆补丁仓库
+        echo "Cloning Patch Repo..."
+        git clone $PATCH_REPO_URL patch_repo
+        
+        # 4. 应用补丁 (覆盖文件)
+        echo "Applying patches..."
+        cp -r patch_repo/* openwrt/
+        rm -rf patch_repo
+        
+        echo "Source code prepared."
+
+    - name: Load and Convert Configuration (SD -> eMMC)
+      run: |
+        # 检查配置文件是否存在
+        if [ ! -f "$CONFIG_FILE" ]; then
+          echo "Error: $CONFIG_FILE not found in repository root!"
+          exit 1
+        fi
+        
+        # 复制配置文件到 OpenWrt 目录
+        cp $CONFIG_FILE openwrt/.config
+        
+        # === 关键步骤：将 SD 配置自动修改为 eMMC 配置 ===
+        echo "Converting config from SD to eMMC..."
+        cd openwrt
+        # 将所有的 somlabs_sd 替换为 somlabs_emmc
+        sed -i 's/somlabs_sd/somlabs_emmc/g' .config
+        # 确保 Target Profile 也被修改
+        sed -i 's/DEVICE_somlabs_sd/DEVICE_somlabs_emmc/g' .config
+        
+        # 验证修改结果
+        if grep -q "somlabs_emmc" .config; then
+          echo "Success: Config converted to eMMC mode."
+        else
+          echo "Error: Failed to convert config!"
+          exit 1
+        fi
+
+    - name: Update Feeds & Defconfig
+      working-directory: ./openwrt
+      run: |
+        # 更新 Feeds
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        
+        # 允许 root 编译
+        export FORCE_UNSAFE_CONFIGURE=1
+        
+        # 扩展配置 (补全依赖)
+        make defconfig
+        
+        # 再次检查是否回退到了错误的平台 (防止配置失效)
+        if grep -q "CONFIG_TARGET_ath79=y" .config; then
+          echo "CRITICAL ERROR: Target fell back to ath79! Configuration failed."
+          exit 1
+        fi
+
+    - name: Download Packages
+      working-directory: ./openwrt
+      run: |
+        export FORCE_UNSAFE_CONFIGURE=1
+        echo "Downloading packages..."
+        make download -j8
+        # 清理下载失败的空文件
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile Firmware
+      working-directory: ./openwrt
+      run: |
+        echo -e "$(nproc) thread compile"
+        export FORCE_UNSAFE_CONFIGURE=1
+        
+        # 开始编译
+        # 如果多核编译失败，自动尝试单核编译并打印错误日志
+        make -j$(nproc) || make -j1 V=s
+
+    - name: Organize Output Files
+      if: success()
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+
+    - name: Upload Firmware Artifacts
+      uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: OpenWrt-imx6ull-eMMC-Firmware
+        path: ${{ env.FIRMWARE_PATH }}
