@@ -1,9 +1,9 @@
-name: Build OpenWrt Test
+name: Build OpenWrt Test (Native)
 
 on:
   push:
     paths: [ '.config' ]
-  workflow_dispatch:
+  workflow_dispatch:  # 手动触发
 
 jobs:
   build:
@@ -13,26 +13,42 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: 清理磁盘空间（关键！不跑这个大概率爆磁盘）
+    - name: 清理磁盘空间（避免 7GB 限额爆掉）
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo docker image prune -af || true
+        sudo docker system prune -af || true
         df -h
 
-    - name: 安装基础依赖
+    - name: 安装编译依赖
       run: |
         sudo apt update -y
         sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib \
             g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils \
-            python3-setuptools rsync swig unzip wget time qemu-utils
+            python3-setuptools rsync swig unzip wget time qemu-utils zip
 
-    - name: 使用最稳定的官方 Action（推荐）
-      uses: OpenWrt-Actions/build-openwrt@main  # ← 这里是正确的仓库名
-      with:
-        config_file: .config   # 直接使用你仓库里的 .config
+    - name: Clone OpenWrt 源码（用稳定版 23.05 分支）
+      run: |
+        git clone https://github.com/openwrt/openwrt.git -b openwrt-23.05 openwrt-source
+        cd openwrt-source
 
-    - name: 上传固件（成功后在这里下载）
+    - name: 准备 .config 和 feeds
+      run: |
+        cd openwrt-source
+        cp ../.config .config  # 复制你的配置
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        make defconfig  # 应用你的 .config
+
+    - name: 编译固件（多核加速）
+      run: |
+        cd openwrt-source
+        make -j$(nproc) V=s || make -j1 V=s  # V=s 详细日志，失败时单核重试
+
+    - name: 打包并上传固件
       uses: actions/upload-artifact@v4
       with:
-        name: OpenWrt-firmware
-        path: bin/targets/**/*
+        name: OpenWrt-VisionSOM6ULL-SD
+        path: |
+          openwrt-source/bin/targets/imx6ull/generic/
+          openwrt-source/bin/targets/imx6ull/generic/sha256sums
+        if-no-files-found: error
