@@ -1,0 +1,89 @@
+name: OpenWrt Build (Container)
+
+on:
+  workflow_dispatch: # 手动触发
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt
+  # 根据你的 .config 中 Kernel 5.4 判断，这里建议用 openwrt-21.02 或 openwrt-22.03
+  # 如果你的板子需要特定分支，请修改这里
+  REPO_BRANCH: openwrt-21.02
+  CONFIG_FILE: mx6ull.config
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # 核心点：指定使用 OpenWrt 官方提供的构建环境镜像
+    container:
+      image: openwrt/buildroot:latest
+      # 这一步很重要，因为 GitHub Action 挂载卷的权限问题，
+      # 我们需要以 root 身份进入容器，稍后通过 FORCE_UNSAFE_CONFIGURE 绕过 root 检查
+      options: --user root
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Clone OpenWrt Source
+      run: |
+        # 解决 Git 安全目录报错
+        git config --global --add safe.directory '*'
+        
+        # 克隆源码
+        echo "Cloning $REPO_BRANCH from $REPO_URL..."
+        git clone --depth 1 -b $REPO_BRANCH $REPO_URL openwrt
+
+    - name: Load Custom Configuration
+      run: |
+        # 检查根目录下是否存在 mx6ull.config
+        if [ ! -f "$CONFIG_FILE" ]; then
+          echo "Error: $CONFIG_FILE not found in repository root!"
+          ls -la
+          exit 1
+        fi
+        
+        # 复制配置文件
+        cp $CONFIG_FILE openwrt/.config
+        echo "Configuration loaded."
+
+    - name: Update Feeds & Dependencies
+      working-directory: ./openwrt
+      run: |
+        # 容器内无需 apt-get install，直接更新 feeds
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        
+        # 应用配置 (自动补全依赖)
+        # 必须添加 FORCE_UNSAFE_CONFIGURE=1 否则 OpenWrt 不允许 root 编译
+        export FORCE_UNSAFE_CONFIGURE=1
+        make defconfig
+
+    - name: Download Packages
+      working-directory: ./openwrt
+      run: |
+        export FORCE_UNSAFE_CONFIGURE=1
+        make download -j8
+        # 清理下载失败的文件
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile Firmware
+      working-directory: ./openwrt
+      run: |
+        echo -e "$(nproc) thread compile"
+        export FORCE_UNSAFE_CONFIGURE=1
+        
+        # 开始编译，增加 V=s 以便出错时查看日志
+        make -j$(nproc) || make -j1 V=s
+
+    - name: Organize Files
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: OpenWrt-Firmware
+        path: ${{ env.FIRMWARE_PATH }}
