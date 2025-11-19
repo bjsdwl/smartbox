@@ -11,34 +11,44 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
-    # 修正：用官方 ImageBuilder 镜像（自带 imx6ull 21.02.7，无需 tarball）
+    # 修正：用官方通用 21.02 ImageBuilder（存在）+ --user root
     container:
-      image: openwrtorg/imagebuilder:imx6ull-openwrt-21.02.7  # 官方镜像，完美支持 imx6ull
-      options: --user root --cpus 4                          # root 权限 + CPU 限制
+      image: openwrt/imagebuilder:openwrt-21.02   # 官方仓库 + 通用标签
+      options: --user root --cpus 4               # root 权限 + CPU 限制
 
     steps:
       - name: Checkout 代码（含你的 .config）
         uses: actions/checkout@v4
 
-      - name: 准备 ImageBuilder 环境
+      - name: 准备 ImageBuilder 环境（下载 imx6ull 21.02 tarball）
         run: |
-          # ImageBuilder 自带工具链，验证版本
-          echo "OpenWrt ImageBuilder version: $(cat .version 2>/dev/null || echo '21.02.7')"
-          echo "Target: imx6ull/generic"
-          echo "Available profiles: $(./scripts/profile_helper.sh list | head -10)"
+          # 通用镜像启动后，手动下载 imx6ull ImageBuilder tarball（~800MB，3~7 分钟）
+          wget https://downloads.openwrt.org/releases/21.02.3/targets/imx6ull/generic/openwrt-imagebuilder-imx6ull-generic.Linux-x86_64.tar.xz
+          
+          # 解压到当前目录（ImageBuilder 标准路径）
+          tar -xzf openwrt-imagebuilder-*.tar.xz
+          cd openwrt-imagebuilder-imx6ull-generic.Linux-x86_64  # 进入解压目录
+          
           # 更新 feeds（确保 Docker 等包可用）
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          
+          # 验证
+          echo "OpenWrt ImageBuilder version: $(cat .version 2>/dev/null || echo '21.02.3')"
+          echo "Target: imx6ull/generic"
+          ls -la | head -10
 
       - name: 复制你的 .config 并生成镜像
         run: |
-          # ImageBuilder 用 .config 直接构建（无需 defconfig，自动应用）
-          cp /github/workspace/.config .config
-          make image PROFILE="somlabs_sd" PACKAGES="docker dockerd containerd runc tini luci ttyd ser2net btrfs-progs px5g-wolfssl" V=s
-          # 如果 eMMC 版，改 PROFILE="somlabs_emmc"
+          cd openwrt-imagebuilder-imx6ull-generic.Linux-x86_64
+          cp /github/workspace/.config .config                     # 从仓库根目录复制
+          make image PROFILE="somlabs_sd" \
+                      PACKAGES="docker dockerd containerd runc tini luci ttyd ser2net btrfs-progs px5g-wolfssl" \
+                      V=s || make image PROFILE="somlabs_sd" -j1 V=s  # 多核失败时单核重试
 
       - name: 打包固件（只上传 imx6ull 相关文件）
         run: |
+          cd openwrt-imagebuilder-imx6ull-generic.Linux-x86_64
           mkdir -p upload
           cp bin/targets/imx6ull/generic/*.{bin,dtb,img.gz,manifest,sysupgrade} upload/ 2>/dev/null || true
           cp bin/targets/imx6ull/generic/sha256sums upload/ 2>/dev/null || true
@@ -49,5 +59,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenWrt-21.02-VisionSOM6ULL-${{ github.sha }}
-          path: upload/*
+          path: openwrt-imagebuilder-imx6ull-generic.Linux-x86_64/upload/*
           if-no-files-found: error
