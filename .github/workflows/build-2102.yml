@@ -2,68 +2,83 @@ name: OpenWrt 21.02 VisionSOM-6ULL + Docker
 
 on:
   push:
-    paths: [ '.config' ]
-  workflow_dispatch:
+    paths: [ '.config' ]          # 改 .config 自动编译
+  workflow_dispatch:       # 也支持手动触发
 
 env:
   REPO_URL: https://github.com/openwrt/openwrt
   REPO_BRANCH: openwrt-21.02
-  CONFIG_FILE: .config
-  FORCE_UNSAFE_CONFIGURE: 1    # 关键：提前全局生效！！！
+  CONFIG_FILE: .config                     # 直接用根目录的 .config
+  FORCE_UNSAFE_CONFIGURE: 1                # 关键1：全局提前生效
 
 jobs:
   build:
     runs-on: ubuntu-latest
     container:
       image: p3terx/openwrt-build-env:20.04
-      # 关键：去掉 --user root，改用普通用户 + sudo
-      # options: --user root
+      # 关键2：删掉 --user root，用镜像默认的 builduser 用户
+      # options: --user root   ← 删除这行！
 
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: 克隆源码
+      - name: Clone OpenWrt Source
         run: |
+          git config --global --add safe.directory '*'
+          echo "Cloning $REPO_BRANCH from $REPO_URL..."
           git clone --depth 1 -b $REPO_BRANCH $REPO_URL openwrt
 
-      - name: 加载配置
+      - name: Load Custom Configuration
         run: |
-          cp .config openwrt/.config
-          # 强制写死你的设备（防万一）
+          ls -la
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "Error: $CONFIG_FILE not found!"
+            exit 1
+          fi
+          cp $CONFIG_FILE openwrt/.config
+
+          # 强制锁定你的设备（防止 .config 里写错）
           sed -i '/CONFIG_TARGET_imx6ull_DEVICE_/d' openwrt/.config
           echo "CONFIG_TARGET_imx6ull_DEVICE_somlabs_sd=y" >> openwrt/.config
-          # eMMC 版改成下面这行：
+          # 想要 eMMC 版？把上面这行改成：
           # echo "CONFIG_TARGET_imx6ull_DEVICE_somlabs_emmc=y" >> openwrt/.config
 
-      - name: Update feeds
+          echo "Configuration loaded and target locked."
+
+      - name: Update Feeds & Dependencies
         working-directory: ./openwrt
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           make defconfig
 
-      - name: 下载源码包
+      - name: Download Packages
         working-directory: ./openwrt
         run: |
           make download -j8 || make download -j1
+          find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
 
-      - name: 编译固件
+      - name: Compile Firmware
         working-directory: ./openwrt
         run: |
-          echo "开始编译，使用 $(nproc) 线程"
+          echo "使用 $(nproc) 线程编译"
           make -j$(nproc) V=s || make -j1 V=s
 
-      - name: 上传固件
+      - name: Organize Files
+        if: success()
         run: |
-          cd openwrt/bin/targets/imx6ull/generic
+          cd openwrt/bin/targets/imx6ull/generic 2>/dev/null || echo "No imx6ull output!"
           mkdir -p ../../upload
           cp *somlabs_sd* sha256sums ../../upload/ 2>/dev/null || true
+          # cp *somlabs_emmc* sha256sums ../../upload/ 2>/dev/null || true   # eMMC 版用这行
           ls -lh ../../upload/
+          echo "FIRMWARE_PATH=$PWD/../../upload" >> $GITHUB_ENV
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: OpenWrt-21.02-VisionSOM6ULL-${{ github.run_number }}
-          path: openwrt/upload/*
+          path: ${{ env.FIRMWARE_PATH }}
