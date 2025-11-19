@@ -1,63 +1,74 @@
-# .github/workflows/build-openwrt-2102.yml
-name: Build OpenWrt 21.02 (i.MX6ULL + Docker via ImageBuilder)
+name: OpenWrt 21.02 VisionSOM-6ULL + Docker
 
 on:
   push:
     paths:
-      - '.config'           # 只要 .config 改了就自动编译
-  workflow_dispatch:        # 也可以手动点运行
+      - '.config'          # 改了配置自动编译
+  workflow_dispatch:       # 也支持手动触发
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt
+  REPO_BRANCH: openwrt-21.02
+  CONFIG_FILE: .config     # ← 直接用根目录的 .config（你原来就是这样）
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-
-    # 修正：用官方通用 21.02 ImageBuilder（存在）+ --user root
+    runs-on: ubuntu-latest
     container:
-      image: openwrt/imagebuilder:openwrt-21.02   # 官方仓库 + 通用标签
-      options: --user root --cpus 4               # root 权限 + CPU 限制
+      image: p3terx/openwrt-build-env:20.04   # 完美兼容 21.02
+      options: --user root --cpus 4           # root + 限制 CPU 防 OOM
 
     steps:
-      - name: Checkout 代码（含你的 .config）
+      - name: Checkout 仓库（含你的 .config）
         uses: actions/checkout@v4
 
-      - name: 准备 ImageBuilder 环境（下载 imx6ull 21.02 tarball）
+      - name: 克隆 OpenWrt 21.02 源码
         run: |
-          # 通用镜像启动后，手动下载 imx6ull ImageBuilder tarball（~800MB，3~7 分钟）
-          wget https://downloads.openwrt.org/releases/21.02.3/targets/imx6ull/generic/openwrt-imagebuilder-imx6ull-generic.Linux-x86_64.tar.xz
-          
-          # 解压到当前目录（ImageBuilder 标准路径）
-          tar -xzf openwrt-imagebuilder-*.tar.xz
-          cd openwrt-imagebuilder-imx6ull-generic.Linux-x86_64  # 进入解压目录
-          
-          # 更新 feeds（确保 Docker 等包可用）
+          git clone --depth 1 -b $REPO_BRANCH $REPO_URL openwrt
+          cd openwrt
+          echo "OpenWrt $(git describe --tags)" 
+
+      - name: 加载你的自定义配置
+        run: |
+          cp .config openwrt/.config
+          echo "已加载 $(wc -l < .config) 行配置"
+          # 强制覆盖 target（防止你 .config 里写错）
+          sed -i 's/CONFIG_TARGET_.*_DEVICE_.*/CONFIG_TARGET_imx6ull_DEVICE_somlabs_sd=y/' openwrt/.config
+          # 如果你要 eMMC 版，改成下面这行（二选一）
+          # sed -i 's/CONFIG_TARGET_.*_DEVICE_.*/CONFIG_TARGET_imx6ull_DEVICE_somlabs_emmc=y/' openwrt/.config
+
+      - name: Update feeds & Install packages
+        working-directory: ./openwrt
+        run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          
-          # 验证
-          echo "OpenWrt ImageBuilder version: $(cat .version 2>/dev/null || echo '21.02.3')"
-          echo "Target: imx6ull/generic"
-          ls -la | head -10
+          make defconfig
 
-      - name: 复制你的 .config 并生成镜像
+      - name: 下载源码包（清理残缺文件防卡死）
+        working-directory: ./openwrt
         run: |
-          cd openwrt-imagebuilder-imx6ull-generic.Linux-x86_64
-          cp /github/workspace/.config .config                     # 从仓库根目录复制
-          make image PROFILE="somlabs_sd" \
-                      PACKAGES="docker dockerd containerd runc tini luci ttyd ser2net btrfs-progs px5g-wolfssl" \
-                      V=s || make image PROFILE="somlabs_sd" -j1 V=s  # 多核失败时单核重试
+          make download -j8 || make download -j1
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
 
-      - name: 打包固件（只上传 imx6ull 相关文件）
+      - name: 开始编译（多核 + 详细日志）
+        working-directory: ./openwrt
         run: |
-          cd openwrt-imagebuilder-imx6ull-generic.Linux-x86_64
-          mkdir -p upload
-          cp bin/targets/imx6ull/generic/*.{bin,dtb,img.gz,manifest,sysupgrade} upload/ 2>/dev/null || true
-          cp bin/targets/imx6ull/generic/sha256sums upload/ 2>/dev/null || true
-          echo "=== 固件列表 ==="
-          ls -lh upload/
+          echo "使用 $(nproc) 线程编译"
+          make -j$(nproc) V=s || make -j1 V=s   # 失败自动降单核
 
-      - name: 上传固件 Artifacts（成功后直接下载）
+      - name: 整理并上传固件
+        if: success()
+        run: |
+          cd openwrt/bin/targets/imx6ull/generic || exit 1
+          mkdir -p ../../upload
+          cp *somlabs_sd* .*sha256sums ../../upload/ 2>/dev/null || true   # SD 卡版
+          # cp *somlabs_emmc* .*sha256sums ../../upload/ 2>/dev/null || true  # eMMC 版
+          ls -lh ../../upload/
+
+      - name: 上传 Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: OpenWrt-21.02-VisionSOM6ULL-${{ github.sha }}
-          path: openwrt-imagebuilder-imx6ull-generic.Linux-x86_64/upload/*
+          name: OpenWrt-21.02-VisionSOM6ULL-${{ github.run_number }}
+          path: openwrt/upload/*
           if-no-files-found: error
