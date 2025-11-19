@@ -1,0 +1,52 @@
+# .github/workflows/build-openwrt-2102.yml
+name: Build OpenWrt 21.02 (i.MX6ULL + Docker)
+
+on:
+  push:
+    paths:
+      - '.config'           # 只要 .config 改了就自动编译
+  workflow_dispatch:        # 也可以手动点运行
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    # 关键：使用官方 21.02 SDK 镜像（里面自带 gcc8/python2/libssl1.1）
+    container:
+      image: openwrtorg/sdk:imx6ull-21.02.7   # 官方 21.02 专用镜像
+      options: --cpus 4                        # GitHub Actions 免费 runner 给 2核，这里最多用 4
+
+    steps:
+      - name: Checkout 代码（含你的 .config）
+        uses: actions/checkout@v4
+
+      - name: 准备编译环境
+        run: |
+          # 镜像里已经自带所有依赖，无需 apt install
+          echo "Current user: $(whoami)"
+          echo "OpenWrt version: $(cat VERSION)"
+          echo "Target: $(grep CONFIG_TARGET .config | head -1)"
+
+      - name: 复制你的 .config 并 defconfig
+        run: |
+          cp .config .config.custom
+          make defconfig
+
+      - name: 开始编译（多核 + 详细日志）
+        run: |
+          make -j$(nproc) V=s || make -j1 V=s   # 失败时自动降到单核重试
+
+      - name: 打包固件（只上传 imx6ull 相关文件）
+        run: |
+          mkdir -p upload
+          cp bin/targets/imx6ull/generic/*.{bin,dtb,img.gz,manifest} upload/ 2>/dev/null || true
+          cp bin/targets/imx6ull/generic/sha256sums upload/ 2>/dev/null || true
+          echo "=== 固件列表 ==="
+          ls -lh upload/
+
+      - name: 上传固件 Artifacts（成功后直接下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt-21.02-VisionSOM6ULL-${{ github.sha }}
+          path: upload/*
+          if-no-files-found: error
