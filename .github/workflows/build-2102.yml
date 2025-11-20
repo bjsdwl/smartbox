@@ -1,4 +1,4 @@
-name: OpenWrt 21.02 VisionSOM-6ULL + Docker
+name: OpenWrt 21.02 VisionSOM-6ULL + Docker--废弃
 
 on:
   push:
