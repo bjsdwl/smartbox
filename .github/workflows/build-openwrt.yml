@@ -1,4 +1,4 @@
-name: Build OpenWrt imx6ull
+name: Build OpenWrt imx6ull--废弃
 
 on:
   workflow_dispatch: # 允许手动触发编译
