@@ -1,4 +1,4 @@
-name: Build OpenWrt Test (Native)
+name: Build OpenWrt Test (Native)-废弃
 
 on:
   push:
