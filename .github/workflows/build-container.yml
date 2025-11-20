@@ -1,4 +1,4 @@
-name: OpenWrt Build (Container)
+name: OpenWrt Build (Container)--废弃
 
 on:
   workflow_dispatch: # 手动触发
